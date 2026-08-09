@@ -16,7 +16,11 @@ interface ScanState {
   originalUrl: string | null
   originalWidth: number
   originalHeight: number
-  /** Corners in preview coordinate space (scaled to preview size) */
+  /** Actual width of the detection-scale image */
+  previewWidth: number
+  /** Actual height of the detection-scale image */
+  previewHeight: number
+  /** Corners in preview coordinate space */
   previewCorners: Quadrilateral | null
   /** Corners in original image coordinate space */
   originalCorners: Quadrilateral | null
@@ -25,8 +29,6 @@ interface ScanState {
   error: string | null
 }
 
-const PREVIEW_MAX = 600
-
 export default function useDocumentScan() {
   const [state, setState] = useState<ScanState>({
     loading: false,
@@ -34,6 +36,8 @@ export default function useDocumentScan() {
     originalUrl: null,
     originalWidth: 0,
     originalHeight: 0,
+    previewWidth: 0,
+    previewHeight: 0,
     previewCorners: null,
     originalCorners: null,
     resultUrl: null,
@@ -41,6 +45,12 @@ export default function useDocumentScan() {
     error: null,
   })
   const originalImageRef = useRef<HTMLImageElement | null>(null)
+  const onResultRef = useRef<(() => void) | null>(null)
+
+  /** Register a callback to be called when scan result is ready */
+  const onResultReady = useCallback((fn: () => void) => {
+    onResultRef.current = fn
+  }, [])
 
   /** Load file and auto-detect corners */
   const loadFile = useCallback(async (file: File) => {
@@ -60,7 +70,7 @@ export default function useDocumentScan() {
       const origH = img.naturalHeight
 
       // Detect corners on scaled-down version
-      const { imageData } = imageToImageData(img, PREVIEW_MAX)
+      const { imageData } = imageToImageData(img, 600)
       const previewW = imageData.width
       const previewH = imageData.height
 
@@ -79,6 +89,8 @@ export default function useDocumentScan() {
         originalUrl: url,
         originalWidth: origW,
         originalHeight: origH,
+        previewWidth: previewW,
+        previewHeight: previewH,
         previewCorners,
         originalCorners,
         resultUrl: null,
@@ -94,15 +106,18 @@ export default function useDocumentScan() {
     }
   }, [])
 
-  /** Update one corner (in preview coordinate space) */
+  /** Update one corner (point is in preview coordinate space) */
   const updatePreviewCorner = useCallback((corner: keyof Quadrilateral, point: Point) => {
     setState(s => {
-      if (!s.previewCorners || !s.originalCorners) return s
+      if (!s.previewCorners || !s.originalCorners || !s.previewWidth) return s
       const newPreview = { ...s.previewCorners, [corner]: point }
-      // Also update original-space corners proportionally
-      const sx = s.originalWidth / PREVIEW_MAX
-      const sy = s.originalHeight / PREVIEW_MAX
-      const newOriginal = { ...s.originalCorners, [corner]: { x: point.x * sx, y: point.y * sy } }
+      // Scale from preview space to original space using actual preview dimensions
+      const sx = s.originalWidth / s.previewWidth
+      const sy = s.originalHeight / s.previewHeight
+      const newOriginal = {
+        ...s.originalCorners,
+        [corner]: { x: Math.round(point.x * sx), y: Math.round(point.y * sy) },
+      }
       return { ...s, previewCorners: newPreview, originalCorners: newOriginal }
     })
   }, [])
@@ -120,6 +135,9 @@ export default function useDocumentScan() {
       error: null,
     }))
 
+    // Yield to let the UI update before heavy computation
+    await new Promise(r => setTimeout(r, 50))
+
     try {
       // Draw original image to canvas
       const canvas = document.createElement('canvas')
@@ -129,8 +147,8 @@ export default function useDocumentScan() {
       ctx.drawImage(img, 0, 0)
       const srcData = ctx.getImageData(0, 0, canvas.width, canvas.height)
 
-      // Compute output size
-      const outSize = computeOutputSize(corners)
+      // Compute output size (max 1200 for fast processing)
+      const outSize = computeOutputSize(corners, 1200)
 
       // Apply perspective transform
       const transformed = perspectiveTransform(
@@ -164,6 +182,9 @@ export default function useDocumentScan() {
         resultUrl,
         resultBlob: blob,
       }))
+
+      // Notify that result is ready (for auto-scroll etc.)
+      onResultRef.current?.()
     } catch (err) {
       setState(s => ({
         ...s,
@@ -183,6 +204,8 @@ export default function useDocumentScan() {
       originalUrl: null,
       originalWidth: 0,
       originalHeight: 0,
+      previewWidth: 0,
+      previewHeight: 0,
       previewCorners: null,
       originalCorners: null,
       resultUrl: null,
@@ -196,6 +219,7 @@ export default function useDocumentScan() {
     loadFile,
     updatePreviewCorner,
     applyTransform,
+    onResultReady,
     reset,
   }
 }

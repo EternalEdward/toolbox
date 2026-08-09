@@ -16,24 +16,33 @@ export default function DocumentScanner() {
     loading,
     progressMessage,
     originalUrl,
-    originalWidth,
-    originalHeight,
+    previewWidth,
+    previewHeight,
     previewCorners,
-    originalCorners,
     resultUrl,
     resultBlob,
     error,
     loadFile,
     updatePreviewCorner,
     applyTransform,
+    onResultReady,
     reset: resetScan,
   } = useDocumentScan()
 
-  // Corner dragging state
   const [draggingCorner, setDraggingCorner] = useState<keyof Quadrilateral | null>(null)
   const imgRef = useRef<HTMLImageElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const resultRef = useRef<HTMLDivElement>(null)
   const [imgDisplay, setImgDisplay] = useState({ w: 0, h: 0 })
+
+  // Auto-scroll to result when ready
+  useEffect(() => {
+    onResultReady(() => {
+      setTimeout(() => {
+        resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 100)
+    })
+  }, [onResultReady])
 
   // Update image display rect whenever image changes or window resizes
   const updateImgSize = useCallback(() => {
@@ -50,33 +59,26 @@ export default function DocumentScanner() {
     return () => window.removeEventListener('resize', updateImgSize)
   }, [updateImgSize])
 
-  // Convert corner from preview space (PREVIEW_MAX) to display space
+  // Convert corner from preview space to display space
   const toDisplay = useCallback(
     (p: Point): Point => {
-      if (!originalUrl || imgDisplay.w === 0) return p
-      // previewCorners are in the detection scale where max dimension = PREVIEW_MAX
-      const previewScale = PREVIEW_MAX / Math.max(imgRef.current?.naturalWidth || 1, imgRef.current?.naturalHeight || 1)
-      const previewActualW = (imgRef.current?.naturalWidth || 1) * previewScale
-      const previewActualH = (imgRef.current?.naturalHeight || 1) * previewScale
-      const sx = imgDisplay.w / previewActualW
-      const sy = imgDisplay.h / previewActualH
+      if (!previewWidth || !previewHeight || imgDisplay.w === 0) return p
+      const sx = imgDisplay.w / previewWidth
+      const sy = imgDisplay.h / previewHeight
       return { x: p.x * sx, y: p.y * sy }
     },
-    [originalUrl, imgDisplay]
+    [previewWidth, previewHeight, imgDisplay]
   )
 
   // Convert display coords back to preview space
   const fromDisplay = useCallback(
     (dx: number, dy: number): Point => {
-      if (!originalUrl || imgDisplay.w === 0) return { x: 0, y: 0 }
-      const previewScale = PREVIEW_MAX / Math.max(imgRef.current?.naturalWidth || 1, imgRef.current?.naturalHeight || 1)
-      const previewActualW = (imgRef.current?.naturalWidth || 1) * previewScale
-      const previewActualH = (imgRef.current?.naturalHeight || 1) * previewScale
-      const sx = imgDisplay.w / previewActualW
-      const sy = imgDisplay.h / previewActualH
+      if (!previewWidth || !previewHeight || imgDisplay.w === 0) return { x: dx, y: dy }
+      const sx = imgDisplay.w / previewWidth
+      const sy = imgDisplay.h / previewHeight
       return { x: dx / sx, y: dy / sy }
     },
-    [originalUrl, imgDisplay]
+    [previewWidth, previewHeight, imgDisplay]
   )
 
   // Drag handlers
@@ -97,11 +99,11 @@ export default function DocumentScanner() {
       const rect = containerRef.current.getBoundingClientRect()
       const dx = e.clientX - rect.left
       const dy = e.clientY - rect.top
-      const clamped = fromDisplay(
+      const pt = fromDisplay(
         Math.max(0, Math.min(imgDisplay.w, dx)),
         Math.max(0, Math.min(imgDisplay.h, dy))
       )
-      updatePreviewCorner(draggingCorner, clamped)
+      updatePreviewCorner(draggingCorner, pt)
     },
     [draggingCorner, imgDisplay, fromDisplay, updatePreviewCorner]
   )
@@ -172,8 +174,8 @@ export default function DocumentScanner() {
             </div>
           )}
 
-          {/* Main area: corner adjustment or result */}
-          <div className={hasResult ? 'grid grid-cols-2 gap-4' : ''}>
+          {/* Main content */}
+          <div className={hasResult ? 'grid grid-cols-1 sm:grid-cols-2 gap-4' : ''}>
             {/* Original with corner overlay */}
             <div>
               <p className="text-sm text-gray-500 mb-2 font-medium">
@@ -218,7 +220,6 @@ export default function DocumentScanner() {
                             zIndex: 20,
                           }}
                         >
-                          {/* Inner dot */}
                           <div
                             className={`w-full h-full rounded-full border-2 transition-transform ${
                               isDragging
@@ -234,12 +235,7 @@ export default function DocumentScanner() {
                     {/* Edge lines connecting corners */}
                     {(() => {
                       const { topLeft: tl, topRight: tr, bottomRight: br, bottomLeft: bl } = displayCorners
-                      const lines = [
-                        [tl, tr],
-                        [tr, br],
-                        [br, bl],
-                        [bl, tl],
-                      ]
+                      const lines = [[tl, tr], [tr, br], [br, bl], [bl, tl]]
                       return (
                         <svg
                           className="absolute inset-0 pointer-events-none"
@@ -272,7 +268,9 @@ export default function DocumentScanner() {
 
             {/* Result preview */}
             {hasResult && (
-              <ImagePreview src={resultUrl!} alt="扫描结果" label="扫描结果" />
+              <div ref={resultRef}>
+                <ImagePreview src={resultUrl!} alt="扫描结果" label="扫描结果" />
+              </div>
             )}
           </div>
 
@@ -282,7 +280,7 @@ export default function DocumentScanner() {
           )}
 
           {/* Action buttons */}
-          <div className="flex gap-3 justify-center">
+          <div className="flex gap-3 justify-center" ref={resultRef}>
             {hasCorners && !hasResult && !loading && (
               <button
                 onClick={applyTransform}
@@ -302,12 +300,20 @@ export default function DocumentScanner() {
                 </button>
               </>
             )}
-            {!hasResult && file && (
+            {!hasResult && file && !loading && (
               <button
                 onClick={handleReset}
                 className="px-6 py-2.5 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
               >
                 重新选择
+              </button>
+            )}
+            {loading && hasCorners && (
+              <button
+                disabled
+                className="px-6 py-2.5 rounded-lg font-medium bg-gray-300 text-gray-500 cursor-not-allowed"
+              >
+                {progressMessage}
               </button>
             )}
           </div>
