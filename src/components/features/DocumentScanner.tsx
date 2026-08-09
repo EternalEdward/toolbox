@@ -23,9 +23,9 @@ export default function DocumentScanner() {
     loading,
     progressMessage,
     originalUrl,
-    previewWidth,
-    previewHeight,
-    previewCorners,
+    imgWidth,
+    imgHeight,
+    corners,
     resultUrl,
     resultBlob,
     adjusting,
@@ -33,7 +33,7 @@ export default function DocumentScanner() {
     loadFile,
     startAdjust,
     finishAdjust,
-    updatePreviewCorner,
+    updateCorner,
     manualScan,
     generateOutput,
     reset: resetScan,
@@ -60,24 +60,32 @@ export default function DocumentScanner() {
     return () => window.removeEventListener('resize', updateImgSize)
   }, [updateImgSize])
 
+  /**
+   * Convert corner from ORIGINAL image pixel coords to DISPLAY pixel coords.
+   * One-step mapping: no intermediate preview space.
+   * The displayed <img> shows the original image scaled by CSS.
+   */
   const toDisplay = useCallback(
     (p: Point): Point => {
-      if (!previewWidth || !previewHeight || imgDisplay.w === 0) return p
-      const sx = imgDisplay.w / previewWidth
-      const sy = imgDisplay.h / previewHeight
-      return { x: p.x * sx, y: p.y * sy }
+      if (!imgWidth || !imgHeight || imgDisplay.w === 0) return p
+      return {
+        x: (p.x / imgWidth) * imgDisplay.w,
+        y: (p.y / imgHeight) * imgDisplay.h,
+      }
     },
-    [previewWidth, previewHeight, imgDisplay]
+    [imgWidth, imgHeight, imgDisplay]
   )
 
+  /** Convert display pixel coords back to original image pixel coords */
   const fromDisplay = useCallback(
     (dx: number, dy: number): Point => {
-      if (!previewWidth || !previewHeight || imgDisplay.w === 0) return { x: dx, y: dy }
-      const sx = imgDisplay.w / previewWidth
-      const sy = imgDisplay.h / previewHeight
-      return { x: dx / sx, y: dy / sy }
+      if (!imgWidth || !imgHeight || imgDisplay.w === 0) return { x: dx, y: dy }
+      return {
+        x: (dx / imgDisplay.w) * imgWidth,
+        y: (dy / imgDisplay.h) * imgHeight,
+      }
     },
-    [previewWidth, previewHeight, imgDisplay]
+    [imgWidth, imgHeight, imgDisplay]
   )
 
   const handlePointerDown = useCallback(
@@ -97,13 +105,13 @@ export default function DocumentScanner() {
       const rect = containerRef.current.getBoundingClientRect()
       const dx = e.clientX - rect.left
       const dy = e.clientY - rect.top
-      const pt = fromDisplay(
+      const origPt = fromDisplay(
         Math.max(0, Math.min(imgDisplay.w, dx)),
         Math.max(0, Math.min(imgDisplay.h, dy))
       )
-      updatePreviewCorner(draggingCorner, pt)
+      updateCorner(draggingCorner, origPt)
     },
-    [draggingCorner, imgDisplay, fromDisplay, updatePreviewCorner]
+    [draggingCorner, imgDisplay, fromDisplay, updateCorner]
   )
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
@@ -141,17 +149,18 @@ export default function DocumentScanner() {
     }
   }, [generateOutput, outputFormat, generating])
 
-  const displayCorners = previewCorners && adjusting
+  // Corners in display coordinates for overlay rendering
+  const displayCorners = corners && adjusting
     ? {
-        topLeft: toDisplay(previewCorners.topLeft),
-        topRight: toDisplay(previewCorners.topRight),
-        bottomRight: toDisplay(previewCorners.bottomRight),
-        bottomLeft: toDisplay(previewCorners.bottomLeft),
+        topLeft: toDisplay(corners.topLeft),
+        topRight: toDisplay(corners.topRight),
+        bottomRight: toDisplay(corners.bottomRight),
+        bottomLeft: toDisplay(corners.bottomLeft),
       }
     : null
 
   const hasResult = !!resultUrl
-  const hasCorners = !!previewCorners
+  const hasCorners = !!corners
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -179,14 +188,10 @@ export default function DocumentScanner() {
             </div>
           )}
 
-          {/* ===== 1. Original image + corner adjustment ===== */}
+          {/* ===== Original image + corner overlay ===== */}
           <div>
             <p className="text-sm text-gray-500 mb-2 font-medium">
-              {adjusting
-                ? '拖拽蓝色角点框选扫描区域'
-                : hasResult
-                ? '原始图片'
-                : '正在处理…'}
+              {adjusting ? '拖拽蓝色角点框选扫描区域' : '原始图片'}
             </p>
             <div
               ref={containerRef}
@@ -208,7 +213,7 @@ export default function DocumentScanner() {
                 />
               )}
 
-              {/* Corner dots — only visible in adjust mode */}
+              {/* Corner dots — only in adjust mode */}
               {displayCorners && (
                 <>
                   {(['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as const).map((key) => {
@@ -239,28 +244,14 @@ export default function DocumentScanner() {
                     )
                   })}
 
-                  {/* Edge lines */}
+                  {/* Edge lines via SVG */}
                   {(() => {
                     const { topLeft: tl, topRight: tr, bottomRight: br, bottomLeft: bl } = displayCorners
-                    const lines = [[tl, tr], [tr, br], [br, bl], [bl, tl]]
                     return (
-                      <svg
-                        className="absolute inset-0 pointer-events-none"
-                        style={{ zIndex: 10 }}
-                        width="100%"
-                        height="100%"
-                      >
-                        {lines.map(([a, b], i) => (
-                          <line
-                            key={i}
-                            x1={a.x}
-                            y1={a.y}
-                            x2={b.x}
-                            y2={b.y}
-                            stroke="rgba(59,130,246,0.6)"
-                            strokeWidth="2"
-                            strokeDasharray="6,3"
-                          />
+                      <svg className="absolute inset-0 pointer-events-none" style={{ zIndex: 10 }}>
+                        {[[tl, tr], [tr, br], [br, bl], [bl, tl]].map(([a, b], i) => (
+                          <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+                            stroke="rgba(59,130,246,0.6)" strokeWidth="2" strokeDasharray="6,3" />
                         ))}
                       </svg>
                     )
@@ -268,24 +259,18 @@ export default function DocumentScanner() {
                 </>
               )}
             </div>
-            {file && (
-              <p className="text-xs text-gray-400 mt-1">{formatBytes(file.size)}</p>
-            )}
+            {file && <p className="text-xs text-gray-400 mt-1">{formatBytes(file.size)}</p>}
           </div>
 
-          {/* ===== 2. Adjust / Scan buttons ===== */}
+          {/* ===== Buttons ===== */}
           {hasCorners && !adjusting && hasResult && (
             <div className="flex gap-3 justify-center flex-wrap">
-              <button
-                onClick={startAdjust}
-                className="px-6 py-2.5 rounded-lg font-medium bg-white border-2 border-blue-500 text-blue-600 hover:bg-blue-50 transition-colors"
-              >
+              <button onClick={startAdjust}
+                className="px-6 py-2.5 rounded-lg font-medium bg-white border-2 border-blue-500 text-blue-600 hover:bg-blue-50 transition-colors">
                 调整选区
               </button>
-              <button
-                onClick={handleReset}
-                className="px-6 py-2.5 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
-              >
+              <button onClick={handleReset}
+                className="px-6 py-2.5 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors">
                 重新选择
               </button>
             </div>
@@ -294,21 +279,16 @@ export default function DocumentScanner() {
           {adjusting && (
             <div className="space-y-3">
               <div className="flex gap-3 justify-center flex-wrap">
-                <button
-                  onClick={manualScan}
-                  disabled={loading}
+                <button onClick={manualScan} disabled={loading}
                   className={`px-6 py-2.5 rounded-lg font-medium transition-colors ${
                     loading
                       ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                       : 'bg-blue-600 text-white hover:bg-blue-700'
-                  }`}
-                >
+                  }`}>
                   {loading ? '扫描中…' : '立即扫描'}
                 </button>
-                <button
-                  onClick={finishAdjust}
-                  className="px-6 py-2.5 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
-                >
+                <button onClick={finishAdjust}
+                  className="px-6 py-2.5 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors">
                   完成调整
                 </button>
               </div>
@@ -318,53 +298,42 @@ export default function DocumentScanner() {
             </div>
           )}
 
-          {/* ===== 3. Loading overlay ===== */}
-          {loading && hasCorners && (
-            <LoadingOverlay message={progressMessage} />
-          )}
+          {/* ===== Loading ===== */}
+          {loading && hasCorners && <LoadingOverlay message={progressMessage} />}
 
-          {/* ===== 4. Result — always visible when available ===== */}
+          {/* ===== Result ===== */}
           {hasResult && (
             <div className="space-y-4 pt-4 border-t border-gray-200">
               <ImagePreview src={resultUrl!} alt="扫描结果" label="扫描结果" />
 
-              {/* Format selector */}
               <div className="flex items-center justify-center gap-2">
                 <span className="text-sm text-gray-500 mr-1">输出格式：</span>
                 <div className="inline-flex rounded-lg border border-gray-300 bg-white overflow-hidden">
                   {FORMAT_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => setOutputFormat(opt.value)}
+                    <button key={opt.value} onClick={() => setOutputFormat(opt.value)}
                       className={`px-4 py-1.5 text-sm font-medium transition-colors ${
                         outputFormat === opt.value
                           ? 'bg-blue-600 text-white'
                           : 'text-gray-600 hover:bg-gray-100'
-                      }`}
-                    >
+                      }`}>
                       {opt.label}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Download */}
               <div className="flex gap-3 justify-center">
-                <button
-                  onClick={handleDownload}
-                  disabled={generating}
+                <button onClick={handleDownload} disabled={generating}
                   className={`px-6 py-2.5 rounded-lg font-medium transition-colors ${
                     generating
                       ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                       : 'bg-blue-600 text-white hover:bg-blue-700'
-                  }`}
-                >
+                  }`}>
                   {generating ? '生成中…' : `下载 ${outputFormat.toUpperCase()}`}
                 </button>
               </div>
             </div>
           )}
-
         </div>
       )}
     </div>
