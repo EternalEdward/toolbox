@@ -1,14 +1,21 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { Quadrilateral, Point } from '../../types'
+import type { OutputFormat } from '../../hooks/useDocumentScan'
 import ImageDropzone from '../ui/ImageDropzone'
 import ImagePreview from '../ui/ImagePreview'
-import DownloadButton from '../ui/DownloadButton'
 import LoadingOverlay from '../ui/LoadingOverlay'
 import useDocumentScan from '../../hooks/useDocumentScan'
 import { validateImageFile, formatBytes } from '../../utils/file'
+import { saveAs } from 'file-saver'
 
 const PREVIEW_MAX = 600
 const DOT_SIZE = 20
+
+const FORMAT_OPTIONS: { value: OutputFormat; label: string }[] = [
+  { value: 'png', label: 'PNG' },
+  { value: 'jpg', label: 'JPG' },
+  { value: 'pdf', label: 'PDF' },
+]
 
 export default function DocumentScanner() {
   const [file, setFile] = useState<File | null>(null)
@@ -24,12 +31,15 @@ export default function DocumentScanner() {
     error,
     loadFile,
     updatePreviewCorner,
-    applyTransform,
+    scheduleTransform,
+    generateOutput,
     onResultReady,
     reset: resetScan,
   } = useDocumentScan()
 
   const [draggingCorner, setDraggingCorner] = useState<keyof Quadrilateral | null>(null)
+  const [outputFormat, setOutputFormat] = useState<OutputFormat>('png')
+  const [generating, setGenerating] = useState(false)
   const imgRef = useRef<HTMLImageElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const resultRef = useRef<HTMLDivElement>(null)
@@ -44,7 +54,6 @@ export default function DocumentScanner() {
     })
   }, [onResultReady])
 
-  // Update image display rect whenever image changes or window resizes
   const updateImgSize = useCallback(() => {
     if (imgRef.current) {
       setImgDisplay({
@@ -59,7 +68,6 @@ export default function DocumentScanner() {
     return () => window.removeEventListener('resize', updateImgSize)
   }, [updateImgSize])
 
-  // Convert corner from preview space to display space
   const toDisplay = useCallback(
     (p: Point): Point => {
       if (!previewWidth || !previewHeight || imgDisplay.w === 0) return p
@@ -70,7 +78,6 @@ export default function DocumentScanner() {
     [previewWidth, previewHeight, imgDisplay]
   )
 
-  // Convert display coords back to preview space
   const fromDisplay = useCallback(
     (dx: number, dy: number): Point => {
       if (!previewWidth || !previewHeight || imgDisplay.w === 0) return { x: dx, y: dy }
@@ -81,7 +88,6 @@ export default function DocumentScanner() {
     [previewWidth, previewHeight, imgDisplay]
   )
 
-  // Drag handlers
   const handlePointerDown = useCallback(
     (corner: keyof Quadrilateral) => (e: React.PointerEvent) => {
       e.preventDefault()
@@ -111,19 +117,18 @@ export default function DocumentScanner() {
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
     setDraggingCorner(null)
-  }, [])
+    // Trigger debounced transform after corner adjustment
+    scheduleTransform()
+  }, [scheduleTransform])
 
-  // Handle file drop
   const handleFiles = useCallback(
     (files: File[]) => {
       const f = files[0]
       const err = validateImageFile(f)
-      if (err) {
-        alert(err)
-        return
-      }
+      if (err) { alert(err); return }
       resetScan()
       setFile(f)
+      setOutputFormat('png')
       loadFile(f)
     },
     [loadFile, resetScan]
@@ -132,9 +137,22 @@ export default function DocumentScanner() {
   const handleReset = useCallback(() => {
     resetScan()
     setFile(null)
+    setOutputFormat('png')
   }, [resetScan])
 
-  // Corners in display coordinates for rendering
+  const handleDownload = useCallback(async () => {
+    if (generating) return
+    setGenerating(true)
+    try {
+      const output = await generateOutput(outputFormat)
+      if (output) {
+        saveAs(output.blob, output.filename)
+      }
+    } finally {
+      setGenerating(false)
+    }
+  }, [generateOutput, outputFormat, generating])
+
   const displayCorners = previewCorners
     ? {
         topLeft: toDisplay(previewCorners.topLeft),
@@ -152,7 +170,7 @@ export default function DocumentScanner() {
       <div className="text-center">
         <h1 className="text-2xl font-bold text-gray-900">扫描证件</h1>
         <p className="text-gray-500 text-sm mt-1">
-          拍照上传文档或证件，自动矫正扭曲变形并去除背景，生成扫描件效果
+          拍照上传文档，拖拽蓝色角点框选范围，自动矫正并去背景
         </p>
       </div>
 
@@ -160,26 +178,24 @@ export default function DocumentScanner() {
         <>
           <ImageDropzone onFiles={handleFiles} />
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-700">
-            💡 提示：拍摄时将证件平放在对比度明显的背景上（如深色桌面），自动检测效果更好。所有处理均在浏览器本地完成。
+            💡 提示：将证件平放在对比度明显的背景上（如深色桌面），自动检测效果更好。所有处理均在浏览器本地完成。
           </div>
         </>
       ) : loading && !hasCorners ? (
         <LoadingOverlay message={progressMessage} />
       ) : (
         <div className="space-y-6">
-          {/* Error */}
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-center text-red-600 text-sm">
               {error}
             </div>
           )}
 
-          {/* Main content */}
           <div className={hasResult ? 'grid grid-cols-1 sm:grid-cols-2 gap-4' : ''}>
-            {/* Original with corner overlay */}
+            {/* Left: Original with corner overlay */}
             <div>
               <p className="text-sm text-gray-500 mb-2 font-medium">
-                {hasCorners && !hasResult ? '拖拽蓝色角点调整扫描区域' : '原始图片'}
+                {hasCorners ? '拖拽蓝色角点框选扫描区域' : '原始图片'}
               </p>
               <div
                 ref={containerRef}
@@ -201,7 +217,6 @@ export default function DocumentScanner() {
                   />
                 )}
 
-                {/* Corner dots overlay */}
                 {displayCorners && !hasResult && (
                   <>
                     {(['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as const).map((key) => {
@@ -232,7 +247,6 @@ export default function DocumentScanner() {
                       )
                     })}
 
-                    {/* Edge lines connecting corners */}
                     {(() => {
                       const { topLeft: tl, topRight: tr, bottomRight: br, bottomLeft: bl } = displayCorners
                       const lines = [[tl, tr], [tr, br], [br, bl], [bl, tl]]
@@ -266,7 +280,7 @@ export default function DocumentScanner() {
               )}
             </div>
 
-            {/* Result preview */}
+            {/* Right: Result preview */}
             {hasResult && (
               <div ref={resultRef}>
                 <ImagePreview src={resultUrl!} alt="扫描结果" label="扫描结果" />
@@ -274,49 +288,68 @@ export default function DocumentScanner() {
             )}
           </div>
 
-          {/* Loading during transform */}
+          {/* Processing indicator */}
           {loading && hasCorners && (
             <LoadingOverlay message={progressMessage} />
           )}
 
-          {/* Action buttons */}
-          <div className="flex gap-3 justify-center" ref={resultRef}>
-            {hasCorners && !hasResult && !loading && (
-              <button
-                onClick={applyTransform}
-                className="px-6 py-2.5 rounded-lg font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-              >
-                开始扫描
-              </button>
-            )}
-            {hasResult && resultBlob && (
-              <>
-                <DownloadButton blob={resultBlob} filename="scanned_document.png" label="下载扫描件" />
+          {/* Result actions: format + download */}
+          {hasResult && (
+            <div className="space-y-4" ref={resultRef}>
+              {/* Format selector */}
+              <div className="flex items-center justify-center gap-2">
+                <span className="text-sm text-gray-500 mr-1">输出格式：</span>
+                <div className="inline-flex rounded-lg border border-gray-300 bg-white overflow-hidden">
+                  {FORMAT_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setOutputFormat(opt.value)}
+                      className={`px-4 py-1.5 text-sm font-medium transition-colors ${
+                        outputFormat === opt.value
+                          ? 'bg-blue-600 text-white'
+                          : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Download button */}
+              <div className="flex gap-3 justify-center">
+                <button
+                  onClick={handleDownload}
+                  disabled={generating}
+                  className={`px-6 py-2.5 rounded-lg font-medium transition-colors ${
+                    generating
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                  }`}
+                >
+                  {generating ? '生成中…' : `下载 ${outputFormat.toUpperCase()}`}
+                </button>
                 <button
                   onClick={handleReset}
                   className="px-6 py-2.5 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
                 >
                   重新选择
                 </button>
-              </>
-            )}
-            {!hasResult && file && !loading && (
+              </div>
+            </div>
+          )}
+
+          {/* Reset only (no result yet) */}
+          {!hasResult && file && !loading && (
+            <div className="flex gap-3 justify-center">
               <button
                 onClick={handleReset}
                 className="px-6 py-2.5 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
               >
                 重新选择
               </button>
-            )}
-            {loading && hasCorners && (
-              <button
-                disabled
-                className="px-6 py-2.5 rounded-lg font-medium bg-gray-300 text-gray-500 cursor-not-allowed"
-              >
-                {progressMessage}
-              </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
     </div>
