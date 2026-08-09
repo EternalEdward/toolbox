@@ -28,12 +28,13 @@ export default function DocumentScanner() {
     previewCorners,
     resultUrl,
     resultBlob,
+    adjusting,
     error,
     loadFile,
+    startAdjust,
     updatePreviewCorner,
-    scheduleTransform,
+    manualScan,
     generateOutput,
-    onResultReady,
     reset: resetScan,
   } = useDocumentScan()
 
@@ -42,17 +43,7 @@ export default function DocumentScanner() {
   const [generating, setGenerating] = useState(false)
   const imgRef = useRef<HTMLImageElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const resultRef = useRef<HTMLDivElement>(null)
   const [imgDisplay, setImgDisplay] = useState({ w: 0, h: 0 })
-
-  // Auto-scroll to result when ready
-  useEffect(() => {
-    onResultReady(() => {
-      setTimeout(() => {
-        resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      }, 100)
-    })
-  }, [onResultReady])
 
   const updateImgSize = useCallback(() => {
     if (imgRef.current) {
@@ -117,9 +108,7 @@ export default function DocumentScanner() {
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
     setDraggingCorner(null)
-    // Trigger debounced transform after corner adjustment
-    scheduleTransform()
-  }, [scheduleTransform])
+  }, [])
 
   const handleFiles = useCallback(
     (files: File[]) => {
@@ -145,15 +134,13 @@ export default function DocumentScanner() {
     setGenerating(true)
     try {
       const output = await generateOutput(outputFormat)
-      if (output) {
-        saveAs(output.blob, output.filename)
-      }
+      if (output) saveAs(output.blob, output.filename)
     } finally {
       setGenerating(false)
     }
   }, [generateOutput, outputFormat, generating])
 
-  const displayCorners = previewCorners
+  const displayCorners = previewCorners && adjusting
     ? {
         topLeft: toDisplay(previewCorners.topLeft),
         topRight: toDisplay(previewCorners.topRight),
@@ -170,7 +157,7 @@ export default function DocumentScanner() {
       <div className="text-center">
         <h1 className="text-2xl font-bold text-gray-900">扫描证件</h1>
         <p className="text-gray-500 text-sm mt-1">
-          拍照上传文档，拖拽蓝色角点框选范围，自动矫正并去背景
+          拍照上传文档，拖拽角点框选范围，手动点击扫描生成结果
         </p>
       </div>
 
@@ -178,7 +165,7 @@ export default function DocumentScanner() {
         <>
           <ImageDropzone onFiles={handleFiles} />
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm text-yellow-700">
-            💡 提示：将证件平放在对比度明显的背景上（如深色桌面），自动检测效果更好。所有处理均在浏览器本地完成。
+            💡 提示：将证件平放在对比度明显的背景上，自动检测效果更好。所有处理均在浏览器本地完成。
           </div>
         </>
       ) : loading && !hasCorners ? (
@@ -191,111 +178,142 @@ export default function DocumentScanner() {
             </div>
           )}
 
-          <div className={hasResult ? 'grid grid-cols-1 sm:grid-cols-2 gap-4' : ''}>
-            {/* Left: Original with corner overlay */}
-            <div>
-              <p className="text-sm text-gray-500 mb-2 font-medium">
-                {hasCorners ? '拖拽蓝色角点框选扫描区域' : '原始图片'}
-              </p>
-              <div
-                ref={containerRef}
-                className="relative inline-block border border-gray-200 rounded-lg overflow-hidden bg-gray-100"
-                style={{ touchAction: 'none', userSelect: 'none' }}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerCancel={handlePointerUp}
-              >
-                {originalUrl && (
-                  <img
-                    ref={imgRef}
-                    src={originalUrl}
-                    alt="原始文档"
-                    className="block"
-                    style={{ maxWidth: PREVIEW_MAX, maxHeight: PREVIEW_MAX * 1.5 }}
-                    onLoad={updateImgSize}
-                    draggable={false}
-                  />
-                )}
+          {/* ===== 1. Original image + corner adjustment ===== */}
+          <div>
+            <p className="text-sm text-gray-500 mb-2 font-medium">
+              {adjusting
+                ? '拖拽蓝色角点框选扫描区域'
+                : hasResult
+                ? '原始图片'
+                : '正在处理…'}
+            </p>
+            <div
+              ref={containerRef}
+              className="relative inline-block border border-gray-200 rounded-lg overflow-hidden bg-gray-100"
+              style={{ touchAction: 'none', userSelect: 'none' }}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
+            >
+              {originalUrl && (
+                <img
+                  ref={imgRef}
+                  src={originalUrl}
+                  alt="原始文档"
+                  className="block"
+                  style={{ maxWidth: PREVIEW_MAX, maxHeight: PREVIEW_MAX * 1.5 }}
+                  onLoad={updateImgSize}
+                  draggable={false}
+                />
+              )}
 
-                {displayCorners && !hasResult && (
-                  <>
-                    {(['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as const).map((key) => {
-                      const pt = displayCorners[key]
-                      const isDragging = draggingCorner === key
-                      return (
+              {/* Corner dots — only visible in adjust mode */}
+              {displayCorners && (
+                <>
+                  {(['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as const).map((key) => {
+                    const pt = displayCorners[key]
+                    const isDragging = draggingCorner === key
+                    return (
+                      <div
+                        key={key}
+                        onPointerDown={handlePointerDown(key)}
+                        className="absolute cursor-grab active:cursor-grabbing"
+                        style={{
+                          left: pt.x - DOT_SIZE / 2,
+                          top: pt.y - DOT_SIZE / 2,
+                          width: DOT_SIZE,
+                          height: DOT_SIZE,
+                          zIndex: 20,
+                        }}
+                      >
                         <div
-                          key={key}
-                          onPointerDown={handlePointerDown(key)}
-                          className="absolute cursor-grab active:cursor-grabbing"
-                          style={{
-                            left: pt.x - DOT_SIZE / 2,
-                            top: pt.y - DOT_SIZE / 2,
-                            width: DOT_SIZE,
-                            height: DOT_SIZE,
-                            zIndex: 20,
-                          }}
-                        >
-                          <div
-                            className={`w-full h-full rounded-full border-2 transition-transform ${
-                              isDragging
-                                ? 'border-blue-400 bg-blue-300 scale-110'
-                                : 'border-white bg-blue-500'
-                            }`}
-                            style={{ boxShadow: '0 0 0 2px rgba(59,130,246,0.5), 0 1px 4px rgba(0,0,0,0.3)' }}
-                          />
-                        </div>
-                      )
-                    })}
+                          className={`w-full h-full rounded-full border-2 transition-transform ${
+                            isDragging
+                              ? 'border-blue-400 bg-blue-300 scale-110'
+                              : 'border-white bg-blue-500'
+                          }`}
+                          style={{ boxShadow: '0 0 0 2px rgba(59,130,246,0.5), 0 1px 4px rgba(0,0,0,0.3)' }}
+                        />
+                      </div>
+                    )
+                  })}
 
-                    {(() => {
-                      const { topLeft: tl, topRight: tr, bottomRight: br, bottomLeft: bl } = displayCorners
-                      const lines = [[tl, tr], [tr, br], [br, bl], [bl, tl]]
-                      return (
-                        <svg
-                          className="absolute inset-0 pointer-events-none"
-                          style={{ zIndex: 10 }}
-                          width="100%"
-                          height="100%"
-                        >
-                          {lines.map(([a, b], i) => (
-                            <line
-                              key={i}
-                              x1={a.x}
-                              y1={a.y}
-                              x2={b.x}
-                              y2={b.y}
-                              stroke="rgba(59,130,246,0.6)"
-                              strokeWidth="2"
-                              strokeDasharray="6,3"
-                            />
-                          ))}
-                        </svg>
-                      )
-                    })()}
-                  </>
-                )}
-              </div>
-              {file && (
-                <p className="text-xs text-gray-400 mt-1">{formatBytes(file.size)}</p>
+                  {/* Edge lines */}
+                  {(() => {
+                    const { topLeft: tl, topRight: tr, bottomRight: br, bottomLeft: bl } = displayCorners
+                    const lines = [[tl, tr], [tr, br], [br, bl], [bl, tl]]
+                    return (
+                      <svg
+                        className="absolute inset-0 pointer-events-none"
+                        style={{ zIndex: 10 }}
+                        width="100%"
+                        height="100%"
+                      >
+                        {lines.map(([a, b], i) => (
+                          <line
+                            key={i}
+                            x1={a.x}
+                            y1={a.y}
+                            x2={b.x}
+                            y2={b.y}
+                            stroke="rgba(59,130,246,0.6)"
+                            strokeWidth="2"
+                            strokeDasharray="6,3"
+                          />
+                        ))}
+                      </svg>
+                    )
+                  })()}
+                </>
               )}
             </div>
-
-            {/* Right: Result preview */}
-            {hasResult && (
-              <div ref={resultRef}>
-                <ImagePreview src={resultUrl!} alt="扫描结果" label="扫描结果" />
-              </div>
+            {file && (
+              <p className="text-xs text-gray-400 mt-1">{formatBytes(file.size)}</p>
             )}
           </div>
 
-          {/* Processing indicator */}
+          {/* ===== 2. Adjust / Scan buttons ===== */}
+          {hasCorners && (
+            <div className="flex gap-3 justify-center flex-wrap">
+              {!adjusting ? (
+                <button
+                  onClick={startAdjust}
+                  className="px-6 py-2.5 rounded-lg font-medium bg-white border-2 border-blue-500 text-blue-600 hover:bg-blue-50 transition-colors"
+                >
+                  调整选区
+                </button>
+              ) : (
+                <button
+                  onClick={manualScan}
+                  disabled={loading}
+                  className={`px-6 py-2.5 rounded-lg font-medium transition-colors ${
+                    loading
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                  }`}
+                >
+                  {loading ? '扫描中…' : '确认扫描'}
+                </button>
+              )}
+              <button
+                onClick={handleReset}
+                className="px-6 py-2.5 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
+              >
+                重新选择
+              </button>
+            </div>
+          )}
+
+          {/* ===== 3. Loading overlay ===== */}
           {loading && hasCorners && (
             <LoadingOverlay message={progressMessage} />
           )}
 
-          {/* Result actions: format + download */}
-          {hasResult && (
-            <div className="space-y-4" ref={resultRef}>
+          {/* ===== 4. Result — full width, separate row ===== */}
+          {hasResult && !adjusting && (
+            <div className="space-y-4 pt-4 border-t border-gray-200">
+              <ImagePreview src={resultUrl!} alt="扫描结果" label="扫描结果" />
+
               {/* Format selector */}
               <div className="flex items-center justify-center gap-2">
                 <span className="text-sm text-gray-500 mr-1">输出格式：</span>
@@ -316,7 +334,7 @@ export default function DocumentScanner() {
                 </div>
               </div>
 
-              {/* Download button */}
+              {/* Download */}
               <div className="flex gap-3 justify-center">
                 <button
                   onClick={handleDownload}
@@ -329,25 +347,14 @@ export default function DocumentScanner() {
                 >
                   {generating ? '生成中…' : `下载 ${outputFormat.toUpperCase()}`}
                 </button>
-                <button
-                  onClick={handleReset}
-                  className="px-6 py-2.5 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
-                >
-                  重新选择
-                </button>
               </div>
             </div>
           )}
 
-          {/* Reset only (no result yet) */}
-          {!hasResult && file && !loading && (
-            <div className="flex gap-3 justify-center">
-              <button
-                onClick={handleReset}
-                className="px-6 py-2.5 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
-              >
-                重新选择
-              </button>
+          {/* ===== 5. Adjusting hint ===== */}
+          {adjusting && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center text-sm text-blue-700">
+              拖拽蓝色角点到证件四角，调整完毕后点击「确认扫描」
             </div>
           )}
         </div>

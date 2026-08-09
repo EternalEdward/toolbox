@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import type { Quadrilateral, Point } from '../types'
 import {
   loadImageFromBlob,
@@ -22,13 +22,12 @@ interface ScanState {
   previewHeight: number
   previewCorners: Quadrilateral | null
   originalCorners: Quadrilateral | null
-  /** Latest scan result as PNG blob */
   resultBlob: Blob | null
   resultUrl: string | null
+  /** Whether corners should be shown for adjustment */
+  adjusting: boolean
   error: string | null
 }
-
-const DEBOUNCE_MS = 600
 
 export default function useDocumentScan() {
   const [state, setState] = useState<ScanState>({
@@ -43,19 +42,17 @@ export default function useDocumentScan() {
     originalCorners: null,
     resultBlob: null,
     resultUrl: null,
+    adjusting: false,
     error: null,
   })
   const originalImageRef = useRef<HTMLImageElement | null>(null)
   const cornersRef = useRef<Quadrilateral | null>(null)
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const onResultRef = useRef<(() => void) | null>(null)
 
-  const onResultReady = useCallback((fn: () => void) => {
-    onResultRef.current = fn
-  }, [])
-
-  /** Core transform logic — runs perspective correction and returns the result blob */
-  const doTransform = useCallback(async (img: HTMLImageElement, corners: Quadrilateral): Promise<Blob | null> => {
+  /** Core transform logic */
+  const doTransform = useCallback(async (
+    img: HTMLImageElement,
+    corners: Quadrilateral
+  ): Promise<Blob | null> => {
     const canvas = document.createElement('canvas')
     canvas.width = img.naturalWidth
     canvas.height = img.naturalHeight
@@ -80,54 +77,14 @@ export default function useDocumentScan() {
     return new Promise<Blob | null>(res => outCanvas.toBlob(res, 'image/png'))
   }, [])
 
-  /** Public: schedule a transform with debounce */
-  const scheduleTransform = useCallback(() => {
-    const img = originalImageRef.current
-    const corners = cornersRef.current
-    if (!img || !corners) return
-
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-
-    debounceRef.current = setTimeout(async () => {
-      const currentCorners = cornersRef.current
-      const currentImg = originalImageRef.current
-      if (!currentImg || !currentCorners) return
-
-      setState(s => ({ ...s, loading: true, progressMessage: '正在处理…', error: null }))
-
-      try {
-        await new Promise(r => setTimeout(r, 30))
-        const blob = await doTransform(currentImg, currentCorners)
-        if (!blob) throw new Error('处理失败')
-
-        const resultUrl = URL.createObjectURL(blob)
-        setState(s => ({
-          ...s,
-          loading: false,
-          progressMessage: '处理完成',
-          resultBlob: blob,
-          resultUrl,
-        }))
-        onResultRef.current?.()
-      } catch (err) {
-        setState(s => ({
-          ...s,
-          loading: false,
-          error: err instanceof Error ? err.message : '处理失败',
-        }))
-      }
-    }, DEBOUNCE_MS)
-  }, [doTransform])
-
-  /** Load file and auto-detect corners, then auto-transform */
+  /** Load file, auto-detect corners, and auto-scan once */
   const loadFile = useCallback(async (file: File) => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-
     setState(s => ({
       ...s,
       loading: true,
       progressMessage: '正在分析图像…',
       error: null,
+      adjusting: false,
     }))
 
     try {
@@ -150,6 +107,10 @@ export default function useDocumentScan() {
       )
       cornersRef.current = originalCorners
 
+      // Auto-scan immediately
+      const blob = await doTransform(img, originalCorners)
+      const resultUrl = blob ? URL.createObjectURL(blob) : null
+
       setState({
         loading: false,
         progressMessage: '',
@@ -160,38 +121,11 @@ export default function useDocumentScan() {
         previewHeight: previewH,
         previewCorners,
         originalCorners,
-        resultBlob: null,
-        resultUrl: null,
+        resultBlob: blob,
+        resultUrl,
+        adjusting: false,
         error: null,
       })
-
-      // Auto-trigger first transform after a short delay (no debounce, direct)
-      setTimeout(async () => {
-        const currentImg = originalImageRef.current
-        if (!currentImg || !originalCorners) return
-
-        setState(s => ({ ...s, loading: true, progressMessage: '正在处理…', error: null }))
-        try {
-          await new Promise(r => setTimeout(r, 30))
-          const blob = await doTransform(currentImg, originalCorners)
-          if (!blob) throw new Error('处理失败')
-          const resultUrl = URL.createObjectURL(blob)
-          setState(s => ({
-            ...s,
-            loading: false,
-            progressMessage: '',
-            resultBlob: blob,
-            resultUrl,
-          }))
-          onResultRef.current?.()
-        } catch (err) {
-          setState(s => ({
-            ...s,
-            loading: false,
-            error: err instanceof Error ? err.message : '处理失败',
-          }))
-        }
-      }, 300)
     } catch (err) {
       setState(s => ({
         ...s,
@@ -201,7 +135,12 @@ export default function useDocumentScan() {
     }
   }, [doTransform])
 
-  /** Update one corner (point is in preview coordinate space) and schedule re-transform */
+  /** Enter adjustment mode — show corners overlay */
+  const startAdjust = useCallback(() => {
+    setState(s => ({ ...s, adjusting: true }))
+  }, [])
+
+  /** Update one corner (preview coordinate space) */
   const updatePreviewCorner = useCallback((corner: keyof Quadrilateral, point: Point) => {
     setState(s => {
       if (!s.previewCorners || !s.originalCorners || !s.previewWidth) return s
@@ -217,7 +156,38 @@ export default function useDocumentScan() {
     })
   }, [])
 
-  /** Generate a blob in the requested output format */
+  /** Manually trigger scan with current corners */
+  const manualScan = useCallback(async () => {
+    const img = originalImageRef.current
+    const corners = cornersRef.current
+    if (!img || !corners) return
+
+    setState(s => ({ ...s, loading: true, progressMessage: '正在扫描…', error: null }))
+
+    try {
+      await new Promise(r => setTimeout(r, 30))
+      const blob = await doTransform(img, corners)
+      if (!blob) throw new Error('处理失败')
+
+      const resultUrl = URL.createObjectURL(blob)
+      setState(s => ({
+        ...s,
+        loading: false,
+        progressMessage: '',
+        resultBlob: blob,
+        resultUrl,
+        adjusting: false,
+      }))
+    } catch (err) {
+      setState(s => ({
+        ...s,
+        loading: false,
+        error: err instanceof Error ? err.message : '处理失败',
+      }))
+    }
+  }, [doTransform])
+
+  /** Generate output in requested format */
   const generateOutput = useCallback(async (format: OutputFormat): Promise<{ blob: Blob; filename: string } | null> => {
     if (!state.resultBlob) return null
 
@@ -225,7 +195,6 @@ export default function useDocumentScan() {
       return { blob: state.resultBlob, filename: 'scanned_document.png' }
     }
 
-    // For JPG and PDF: load resultBlob as Image, render to canvas
     const img = await loadImageFromBlob(state.resultBlob)
     const canvas = document.createElement('canvas')
     canvas.width = img.naturalWidth
@@ -233,7 +202,6 @@ export default function useDocumentScan() {
     const ctx = canvas.getContext('2d')!
 
     if (format === 'jpg') {
-      // Fill white background then draw the image
       ctx.fillStyle = '#FFFFFF'
       ctx.fillRect(0, 0, canvas.width, canvas.height)
       ctx.drawImage(img, 0, 0)
@@ -244,27 +212,21 @@ export default function useDocumentScan() {
       return { blob, filename: 'scanned_document.jpg' }
     }
 
-    if (format === 'pdf') {
-      // Use jsPDF to create PDF with the scanned image
-      ctx.drawImage(img, 0, 0)
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
-
-      const { jsPDF } = await import('jspdf')
-      const pdf = new jsPDF({
-        orientation: canvas.width > canvas.height ? 'landscape' : 'portrait',
-        unit: 'px',
-        format: [canvas.width, canvas.height],
-      })
-      pdf.addImage(dataUrl, 'JPEG', 0, 0, canvas.width, canvas.height)
-      const blob = pdf.output('blob')
-      return { blob, filename: 'scanned_document.pdf' }
-    }
-
-    return null
+    // PDF
+    ctx.drawImage(img, 0, 0)
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
+    const { jsPDF } = await import('jspdf')
+    const pdf = new jsPDF({
+      orientation: canvas.width > canvas.height ? 'landscape' : 'portrait',
+      unit: 'px',
+      format: [canvas.width, canvas.height],
+    })
+    pdf.addImage(dataUrl, 'JPEG', 0, 0, canvas.width, canvas.height)
+    const blob = pdf.output('blob')
+    return { blob, filename: 'scanned_document.pdf' }
   }, [state.resultBlob])
 
   const reset = useCallback(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
     if (state.originalUrl) URL.revokeObjectURL(state.originalUrl)
     if (state.resultUrl) URL.revokeObjectURL(state.resultUrl)
     originalImageRef.current = null
@@ -281,22 +243,18 @@ export default function useDocumentScan() {
       originalCorners: null,
       resultBlob: null,
       resultUrl: null,
+      adjusting: false,
       error: null,
     })
   }, [state.originalUrl, state.resultUrl])
 
-  // Cleanup debounce on unmount
-  useEffect(() => {
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
-  }, [])
-
   return {
     ...state,
     loadFile,
+    startAdjust,
     updatePreviewCorner,
-    scheduleTransform,
+    manualScan,
     generateOutput,
-    onResultReady,
     reset,
   }
 }
