@@ -8,6 +8,7 @@ const CompressPage = lazy(() => import('./pages/CompressPage'))
 const ConvertPage = lazy(() => import('./pages/ConvertPage'))
 const PdfPage = lazy(() => import('./pages/PdfPage'))
 const RemoveBgPage = lazy(() => import('./pages/RemoveBgPage'))
+const ScanPage = lazy(() => import('./pages/ScanPage'))
 
 function Loading() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
             <Route path="/convert" element={<ConvertPage />} />
             <Route path="/pdf" element={<PdfPage />} />
             <Route path="/remove-bg" element={<RemoveBgPage />} />
+            <Route path="/scan" element={<ScanPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>

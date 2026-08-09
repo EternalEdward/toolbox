@@ -6,6 +6,7 @@ const NAV_ITEMS = [
   { path: '/convert', label: '格式转换' },
   { path: '/pdf', label: '图片转PDF' },
   { path: '/remove-bg', label: '换背景' },
+  { path: '/scan', label: '扫描证件' },
 ]
 
 export default function Header() {

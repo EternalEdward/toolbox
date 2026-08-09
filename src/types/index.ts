@@ -28,3 +28,16 @@ export interface BgColorConfig {
   label: string
   hex: string
 }
+
+// Scan types
+export interface Point {
+  x: number
+  y: number
+}
+
+export interface Quadrilateral {
+  topLeft: Point
+  topRight: Point
+  bottomRight: Point
+  bottomLeft: Point
+}

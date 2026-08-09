@@ -29,6 +29,13 @@ const TOOLS = [
     description: 'AI 智能抠图，替换白/蓝/红背景，或自定义颜色，适合证件照。',
     color: 'bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100',
   },
+  {
+    path: '/scan',
+    icon: '📷',
+    title: '扫描证件',
+    description: '拍照上传文档，自动矫正扭曲变形并去除背景，生成平整扫描件。',
+    color: 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100',
+  },
 ]
 
 export default function HomePage() {
