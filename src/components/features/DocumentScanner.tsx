@@ -32,6 +32,7 @@ export default function DocumentScanner() {
     error,
     loadFile,
     startAdjust,
+    finishAdjust,
     updatePreviewCorner,
     manualScan,
     generateOutput,
@@ -157,7 +158,7 @@ export default function DocumentScanner() {
       <div className="text-center">
         <h1 className="text-2xl font-bold text-gray-900">扫描证件</h1>
         <p className="text-gray-500 text-sm mt-1">
-          拍照上传文档，拖拽角点框选范围，手动点击扫描生成结果
+          拍照上传文档，拖拽角点框选范围，结果实时更新
         </p>
       </div>
 
@@ -273,28 +274,14 @@ export default function DocumentScanner() {
           </div>
 
           {/* ===== 2. Adjust / Scan buttons ===== */}
-          {hasCorners && (
+          {hasCorners && !adjusting && hasResult && (
             <div className="flex gap-3 justify-center flex-wrap">
-              {!adjusting ? (
-                <button
-                  onClick={startAdjust}
-                  className="px-6 py-2.5 rounded-lg font-medium bg-white border-2 border-blue-500 text-blue-600 hover:bg-blue-50 transition-colors"
-                >
-                  调整选区
-                </button>
-              ) : (
-                <button
-                  onClick={manualScan}
-                  disabled={loading}
-                  className={`px-6 py-2.5 rounded-lg font-medium transition-colors ${
-                    loading
-                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                      : 'bg-blue-600 text-white hover:bg-blue-700'
-                  }`}
-                >
-                  {loading ? '扫描中…' : '确认扫描'}
-                </button>
-              )}
+              <button
+                onClick={startAdjust}
+                className="px-6 py-2.5 rounded-lg font-medium bg-white border-2 border-blue-500 text-blue-600 hover:bg-blue-50 transition-colors"
+              >
+                调整选区
+              </button>
               <button
                 onClick={handleReset}
                 className="px-6 py-2.5 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
@@ -304,13 +291,40 @@ export default function DocumentScanner() {
             </div>
           )}
 
+          {adjusting && (
+            <div className="space-y-3">
+              <div className="flex gap-3 justify-center flex-wrap">
+                <button
+                  onClick={manualScan}
+                  disabled={loading}
+                  className={`px-6 py-2.5 rounded-lg font-medium transition-colors ${
+                    loading
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                  }`}
+                >
+                  {loading ? '扫描中…' : '立即扫描'}
+                </button>
+                <button
+                  onClick={finishAdjust}
+                  className="px-6 py-2.5 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
+                >
+                  完成调整
+                </button>
+              </div>
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center text-sm text-blue-700">
+                拖拽蓝色角点，松手后自动更新结果。也可点「立即扫描」手动触发。
+              </div>
+            </div>
+          )}
+
           {/* ===== 3. Loading overlay ===== */}
           {loading && hasCorners && (
             <LoadingOverlay message={progressMessage} />
           )}
 
-          {/* ===== 4. Result — full width, separate row ===== */}
-          {hasResult && !adjusting && (
+          {/* ===== 4. Result — always visible when available ===== */}
+          {hasResult && (
             <div className="space-y-4 pt-4 border-t border-gray-200">
               <ImagePreview src={resultUrl!} alt="扫描结果" label="扫描结果" />
 
@@ -351,12 +365,6 @@ export default function DocumentScanner() {
             </div>
           )}
 
-          {/* ===== 5. Adjusting hint ===== */}
-          {adjusting && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center text-sm text-blue-700">
-              拖拽蓝色角点到证件四角，调整完毕后点击「确认扫描」
-            </div>
-          )}
         </div>
       )}
     </div>

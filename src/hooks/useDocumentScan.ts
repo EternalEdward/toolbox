@@ -47,6 +47,7 @@ export default function useDocumentScan() {
   })
   const originalImageRef = useRef<HTMLImageElement | null>(null)
   const cornersRef = useRef<Quadrilateral | null>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   /** Core transform logic */
   const doTransform = useCallback(async (
@@ -140,7 +141,40 @@ export default function useDocumentScan() {
     setState(s => ({ ...s, adjusting: true }))
   }, [])
 
-  /** Update one corner (preview coordinate space) */
+  /** Exit adjustment mode */
+  const finishAdjust = useCallback(() => {
+    setState(s => ({ ...s, adjusting: false }))
+  }, [])
+
+  /** Run the actual scan using refs (bypasses stale closures) */
+  const runScan = useCallback(async () => {
+    const img = originalImageRef.current
+    const corners = cornersRef.current
+    if (!img || !corners) return
+
+    setState(s => ({ ...s, loading: true, progressMessage: '正在扫描…', error: null }))
+    try {
+      await new Promise(r => setTimeout(r, 30))
+      const blob = await doTransform(img, corners)
+      if (!blob) throw new Error('处理失败')
+      const resultUrl = URL.createObjectURL(blob)
+      setState(s => ({
+        ...s,
+        loading: false,
+        progressMessage: '',
+        resultBlob: blob,
+        resultUrl,
+      }))
+    } catch (err) {
+      setState(s => ({
+        ...s,
+        loading: false,
+        error: err instanceof Error ? err.message : '处理失败',
+      }))
+    }
+  }, [doTransform])
+
+  /** Update one corner and schedule debounced auto-scan */
   const updatePreviewCorner = useCallback((corner: keyof Quadrilateral, point: Point) => {
     setState(s => {
       if (!s.previewCorners || !s.originalCorners || !s.previewWidth) return s
@@ -154,38 +188,17 @@ export default function useDocumentScan() {
       cornersRef.current = newOriginal
       return { ...s, previewCorners: newPreview, originalCorners: newOriginal }
     })
-  }, [])
 
-  /** Manually trigger scan with current corners */
+    // Debounced auto-scan: 800ms after last corner move
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => runScan(), 800)
+  }, [runScan])
+
+  /** Manually trigger scan immediately (clears debounce) */
   const manualScan = useCallback(async () => {
-    const img = originalImageRef.current
-    const corners = cornersRef.current
-    if (!img || !corners) return
-
-    setState(s => ({ ...s, loading: true, progressMessage: '正在扫描…', error: null }))
-
-    try {
-      await new Promise(r => setTimeout(r, 30))
-      const blob = await doTransform(img, corners)
-      if (!blob) throw new Error('处理失败')
-
-      const resultUrl = URL.createObjectURL(blob)
-      setState(s => ({
-        ...s,
-        loading: false,
-        progressMessage: '',
-        resultBlob: blob,
-        resultUrl,
-        adjusting: false,
-      }))
-    } catch (err) {
-      setState(s => ({
-        ...s,
-        loading: false,
-        error: err instanceof Error ? err.message : '处理失败',
-      }))
-    }
-  }, [doTransform])
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    await runScan()
+  }, [runScan])
 
   /** Generate output in requested format */
   const generateOutput = useCallback(async (format: OutputFormat): Promise<{ blob: Blob; filename: string } | null> => {
@@ -252,6 +265,7 @@ export default function useDocumentScan() {
     ...state,
     loadFile,
     startAdjust,
+    finishAdjust,
     updatePreviewCorner,
     manualScan,
     generateOutput,
