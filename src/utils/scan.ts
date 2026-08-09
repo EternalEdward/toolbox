@@ -421,6 +421,15 @@ function computeHomography(
   return h
 }
 
+/** Apply homography forward: H * [x, y, 1]^T → projected coordinates */
+function applyHomography(h: Float64Array, x: number, y: number): { x: number; y: number } {
+  const w = h[6] * x + h[7] * y + h[8]
+  return {
+    x: (h[0] * x + h[1] * y + h[2]) / Math.max(w, 1e-10),
+    y: (h[3] * x + h[4] * y + h[5]) / Math.max(w, 1e-10),
+  }
+}
+
 /** Apply inverse homography: map dst point to src point */
 function applyInverseHomography(h: Float64Array, x: number, y: number): { x: number; y: number } {
   // Compute adjugate of 3x3 matrix for inverse: H_inv = adj(H) / det(H)
@@ -523,7 +532,7 @@ export function perspectiveTransform(
 
   for (let dy = 0; dy < outputHeight; dy++) {
     for (let dx = 0; dx < outputWidth; dx++) {
-      const srcPt = applyInverseHomography(H, dx, dy)
+      const srcPt = applyHomography(H, dx, dy)
       const sx = srcPt.x
       const sy = srcPt.y
 
